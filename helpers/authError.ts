@@ -1,10 +1,24 @@
 import { posthog } from "@/lib/posthog";
 
-export const logAuthError = (error: any, context: string) => {
+const getAuthErrorCode = (error: unknown): string => {
+  if (typeof error !== "object" || error === null) {
+    return "unknown_error";
+  }
+
+  const code = (error as { code?: unknown }).code;
+
+  return typeof code === "string" && code.length > 0
+    ? code
+    : "unknown_error";
+};
+
+export const logAuthError = (error: unknown, context: string) => {
+  const code = getAuthErrorCode(error);
+
   const safeError = {
     context,
-    code: error?.code ?? "unknown_error",
-    message: error?.message ?? "Something went wrong",
+    code,
+    message: "Authentication failed",
   };
 
   console.error("[AUTH_ERROR]", safeError);

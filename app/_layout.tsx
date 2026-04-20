@@ -12,6 +12,7 @@ import { ClerkProvider, useAuth } from "@clerk/expo";
 import { tokenCache } from "@clerk/expo/token-cache";
 import { PostHogProvider } from "posthog-react-native";
 import { posthog } from "@/lib/posthog";
+import Toast from "react-native-toast-message";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -80,6 +81,7 @@ export default function RootLayout() {
       >
         <ClerkProvider publishableKey={publishableKey} tokenCache={tokenCache}>
           <RootLayoutContent />
+          <Toast />
         </ClerkProvider>
       </PostHogProvider>
     </SafeAreaProvider>

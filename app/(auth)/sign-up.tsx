@@ -43,6 +43,10 @@ const SignUp = () => {
             return;
         }
 
+        console.log(signUp.status);
+        console.log(signUp.unverifiedFields.includes('email_address'));
+        console.log(signUp.missingFields);
+
         // Send verification email
         if (!error) {
             await signUp.verifications.sendEmailCode();
