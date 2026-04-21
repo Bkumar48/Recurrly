@@ -1,287 +1,258 @@
-import { View, Text, TextInput, Pressable, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
-import { Link, useRouter, type Href } from 'expo-router';
+import { View, Text, Pressable } from 'react-native';
+import { Link } from 'expo-router';
 import { useSignUp, useAuth } from '@clerk/expo';
-import { useState } from 'react';
-import { SafeAreaView as RNSafeAreaView } from 'react-native-safe-area-context';
-import { styled } from 'nativewind';
+import { useState, useCallback, useMemo } from 'react';
 import { usePostHog } from 'posthog-react-native';
 
-const SafeAreaView = styled(RNSafeAreaView);
+import AuthLayout from '@/components/auth/AuthLayout';
+import BrandHeader from '@/components/auth/BrandHeader';
+import FormField from '@/components/auth/FormField';
+import PasswordField from '@/components/auth/PasswordField';
+import FormErrorBanner from '@/components/auth/FormErrorBanner';
+import VerificationScreen from '@/components/auth/VerificationScreen';
+import { PrimaryButton } from '@/components/auth/Buttons';
+import {
+    EMAIL_REGEX,
+    MIN_PASSWORD_LENGTH,
+    getFriendlyError,
+    navigateAfterAuth,
+} from '@/helpers/authError';
 
 const SignUp = () => {
     const { signUp, errors, fetchStatus } = useSignUp();
     const { isSignedIn } = useAuth();
-    const router = useRouter();
     const posthog = usePostHog();
 
     const [emailAddress, setEmailAddress] = useState('');
     const [password, setPassword] = useState('');
-    const [code, setCode] = useState('');
-
-    // Validation states
     const [emailTouched, setEmailTouched] = useState(false);
     const [passwordTouched, setPasswordTouched] = useState(false);
+    const [formError, setFormError] = useState<string | null>(null);
 
-    // Client-side validation
-    const emailValid = emailAddress.length === 0 || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailAddress);
-    const passwordValid = password.length === 0 || password.length >= 8;
-    const formValid = emailAddress.length > 0 && password.length >= 8 && emailValid;
+    const loading = fetchStatus === 'fetching';
 
-    const handleSubmit = async () => {
-        if (!formValid) return;
+    const { emailValid, passwordValid, formValid } = useMemo(() => {
+        const eValid = emailAddress.length > 0 && EMAIL_REGEX.test(emailAddress);
+        const pValid = password.length >= MIN_PASSWORD_LENGTH;
+        return { emailValid: eValid, passwordValid: pValid, formValid: eValid && pValid };
+    }, [emailAddress, password]);
 
-        const { error } = await signUp.password({
-            emailAddress,
-            password,
-        });
+    const emailFieldError =
+        (emailTouched && emailAddress.length > 0 && !emailValid
+            ? 'Please enter a valid email address'
+            : null) || errors.fields.emailAddress?.message || null;
 
-        if (error) {
-            console.error(JSON.stringify(error, null, 2));
+    const passwordFieldError =
+        (passwordTouched && password.length > 0 && !passwordValid
+            ? `Password must be at least ${MIN_PASSWORD_LENGTH} characters`
+            : null) || errors.fields.password?.message || null;
+
+    const clearFormError = useCallback(() => setFormError(null), []);
+
+    const handleSubmit = useCallback(async () => {
+        setEmailTouched(true);
+        setPasswordTouched(true);
+        if (!formValid || loading) return;
+
+        setFormError(null);
+
+        try {
+            const { error } = await signUp.password({ emailAddress, password });
+
+            if (error) {
+                console.error('[SignUp] password step failed:', JSON.stringify(error, null, 2));
+                posthog.capture('user_sign_up_failed', {
+                    error_code: error.code,
+                    error_message: error.message,
+                    step: 'password',
+                });
+                setFormError(getFriendlyError(error));
+                return;
+            }
+
+            const { error: verificationError } = await signUp.verifications.sendEmailCode();
+
+            if (verificationError) {
+                console.error(
+                    '[SignUp] sendEmailCode failed:',
+                    JSON.stringify(verificationError, null, 2)
+                );
+                posthog.capture('user_sign_up_send_code_failed', {
+                    error_code: verificationError.code,
+                    error_message: verificationError.message,
+                });
+                setFormError(getFriendlyError(verificationError));
+            }
+        } catch (err) {
+            console.error('[SignUp] unexpected error:', err);
             posthog.capture('user_sign_up_failed', {
-                error_message: error.message,
+                error_message: err instanceof Error ? err.message : 'unknown',
+                step: 'exception',
             });
-            return;
+            setFormError(getFriendlyError(err));
         }
+    }, [emailAddress, password, formValid, loading, signUp, posthog]);
 
-        console.log(signUp.status);
-        console.log(signUp.unverifiedFields.includes('email_address'));
-        console.log(signUp.missingFields);
+    const handleVerify = useCallback(
+        async (code: string) => {
+            setFormError(null);
+            try {
+                const { error } = await signUp.verifications.verifyEmailCode({ code });
 
-        // Send verification email
-        if (!error) {
-            await signUp.verifications.sendEmailCode();
-        }
-    };
-
-    const handleVerify = async () => {
-        await signUp.verifications.verifyEmailCode({
-            code,
-        });
-
-        if (signUp.status === 'complete') {
-            await signUp.finalize({
-                navigate: ({ session, decorateUrl }) => {
-                    if (session?.currentTask) {
-                        console.log(session?.currentTask);
-                        return;
-                    }
-
-                    posthog.identify(emailAddress, {
-                        $set: { email: emailAddress },
-                        $set_once: { sign_up_date: new Date().toISOString() },
+                if (error) {
+                    console.error(
+                        '[SignUp] verifyEmailCode failed:',
+                        JSON.stringify(error, null, 2)
+                    );
+                    posthog.capture('user_sign_up_verify_failed', {
+                        error_code: error.code,
+                        error_message: error.message,
                     });
-                    posthog.capture('user_signed_up', { email: emailAddress });
+                    setFormError(getFriendlyError(error));
+                    return;
+                }
 
-                    const url = decorateUrl('/(tabs)');
-                    if (url.startsWith('http')) {
-                        // Only use window.location on web platform
-                        if (typeof window !== 'undefined' && window.location) {
-                            window.location.href = url;
-                        } else {
-                            // On native, just use router navigation
-                            router.replace('/(tabs)' as Href);
+                if (signUp.status !== 'complete') {
+                    console.error('[SignUp] unexpected status after verify:', signUp.status);
+                    setFormError('Sign-up could not be completed. Please try again.');
+                    return;
+                }
+
+                await signUp.finalize({
+                    navigate: ({ session, decorateUrl }) => {
+                        if (session?.currentTask) {
+                            console.log('[SignUp] pending session task:', session.currentTask);
+                            return;
                         }
-                    } else {
-                        router.replace(url as Href);
-                    }
-                },
-            });
-        } else {
-            console.error('Sign-up attempt not complete:', signUp);
+
+                        const distinctId = session?.user?.id;
+                        if (distinctId) {
+                            posthog.identify(distinctId, {
+                                $set_once: { sign_up_date: new Date().toISOString() },
+                            });
+                        }
+                        posthog.capture('user_signed_up');
+
+                        // Native: no-op. (auth)/_layout <Redirect> will kick in.
+                        navigateAfterAuth(decorateUrl);
+                    },
+                });
+            } catch (err) {
+                console.error('[SignUp] verify exception:', err);
+                posthog.capture('user_sign_up_verify_failed', {
+                    error_message: err instanceof Error ? err.message : 'unknown',
+                });
+                setFormError(getFriendlyError(err));
+            }
+        },
+        [signUp, emailAddress, posthog]
+    );
+
+    const handleResend = useCallback(async () => {
+        setFormError(null);
+        try {
+            const { error } = await signUp.verifications.sendEmailCode();
+            if (error) {
+                console.error('[SignUp] resend failed:', JSON.stringify(error, null, 2));
+                setFormError(getFriendlyError(error));
+            }
+        } catch (err) {
+            console.error('[SignUp] resend exception:', err);
+            setFormError(getFriendlyError(err));
         }
-    };
+    }, [signUp]);
 
-    // Don't show anything if already signed in or sign-up is complete
-    if (signUp.status === 'complete' || isSignedIn) {
-        return null;
-    }
+    if (signUp.status === 'complete' || isSignedIn) return null;
 
-    // Show verification screen if email needs verification
-    if (
+    const awaitingEmailVerification =
         signUp.status === 'missing_requirements' &&
         signUp.unverifiedFields.includes('email_address') &&
-        signUp.missingFields.length === 0
-    ) {
+        signUp.missingFields.length === 0;
+
+    if (awaitingEmailVerification) {
         return (
-            <SafeAreaView className="auth-safe-area">
-                <KeyboardAvoidingView
-                    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-                    className="auth-screen"
-                >
-                    <ScrollView
-                        className="auth-scroll"
-                        keyboardShouldPersistTaps="handled"
-                        showsVerticalScrollIndicator={false}
-                    >
-                        <View className="auth-content">
-                            {/* Branding */}
-                            <View className="auth-brand-block">
-                                <View className="auth-logo-wrap">
-                                    <View className="auth-logo-mark">
-                                        <Text className="auth-logo-mark-text">R</Text>
-                                    </View>
-                                    <View>
-                                        <Text className="auth-wordmark">Recurrly</Text>
-                                        <Text className="auth-wordmark-sub">SUBSCRIPTIONS</Text>
-                                    </View>
-                                </View>
-                                <Text className="auth-title">Verify your email</Text>
-                                <Text className="auth-subtitle">
-                                    We sent a verification code to {emailAddress}
-                                </Text>
-                            </View>
-
-                            {/* Verification Form */}
-                            <View className="auth-card">
-                                <View className="auth-form">
-                                    <View className="auth-field">
-                                        <Text className="auth-label">Verification Code</Text>
-                                        <TextInput
-                                            className="auth-input"
-                                            value={code}
-                                            placeholder="Enter 6-digit code"
-                                            placeholderTextColor="rgba(0, 0, 0, 0.4)"
-                                            onChangeText={setCode}
-                                            keyboardType="number-pad"
-                                            autoComplete="one-time-code"
-                                            maxLength={6}
-                                        />
-                                        {errors.fields.code && (
-                                            <Text className="auth-error">{errors.fields.code.message}</Text>
-                                        )}
-                                    </View>
-
-                                    <Pressable
-                                        className={`auth-button ${(!code || fetchStatus === 'fetching') && 'auth-button-disabled'}`}
-                                        onPress={handleVerify}
-                                        disabled={!code || fetchStatus === 'fetching'}
-                                    >
-                                        <Text className="auth-button-text">
-                                            {fetchStatus === 'fetching' ? 'Verifying...' : 'Verify Email'}
-                                        </Text>
-                                    </Pressable>
-
-                                    <Pressable
-                                        className="auth-secondary-button"
-                                        onPress={() => signUp.verifications.sendEmailCode()}
-                                        disabled={fetchStatus === 'fetching'}
-                                    >
-                                        <Text className="auth-secondary-button-text">Resend Code</Text>
-                                    </Pressable>
-                                </View>
-                            </View>
-                        </View>
-                    </ScrollView>
-                </KeyboardAvoidingView>
-            </SafeAreaView>
+            <VerificationScreen
+                title="Verify your email"
+                subtitle={`We sent a verification code to ${emailAddress}`}
+                onVerify={handleVerify}
+                onResend={handleResend}
+                loading={loading}
+                error={formError || errors.fields.code?.message || null}
+                clearError={clearFormError}
+            />
         );
     }
 
-    // Main sign-up form
     return (
-        <SafeAreaView className="auth-safe-area">
-            <KeyboardAvoidingView
-                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-                className="auth-screen"
-            >
-                <ScrollView
-                    className="auth-scroll"
-                    keyboardShouldPersistTaps="handled"
-                    showsVerticalScrollIndicator={false}
-                >
-                    <View className="auth-content">
-                        {/* Branding */}
-                        <View className="auth-brand-block">
-                            <View className="auth-logo-wrap">
-                                <View className="auth-logo-mark">
-                                    <Text className="auth-logo-mark-text">R</Text>
-                                </View>
-                                <View>
-                                    <Text className="auth-wordmark">Recurrly</Text>
-                                    <Text className="auth-wordmark-sub">SUBSCRIPTIONS</Text>
-                                </View>
-                            </View>
-                            <Text className="auth-title">Create your account</Text>
-                            <Text className="auth-subtitle">
-                                Start tracking your subscriptions and never miss a payment
-                            </Text>
-                        </View>
+        <AuthLayout>
+            <BrandHeader
+                title="Create your account"
+                subtitle="Start tracking your subscriptions and never miss a payment"
+            />
 
-                        {/* Sign-Up Form */}
-                        <View className="auth-card">
-                            <View className="auth-form">
-                                <View className="auth-field">
-                                    <Text className="auth-label">Email Address</Text>
-                                    <TextInput
-                                        className={`auth-input ${emailTouched && !emailValid && 'auth-input-error'}`}
-                                        autoCapitalize="none"
-                                        value={emailAddress}
-                                        placeholder="name@example.com"
-                                        placeholderTextColor="rgba(0, 0, 0, 0.4)"
-                                        onChangeText={setEmailAddress}
-                                        onBlur={() => setEmailTouched(true)}
-                                        keyboardType="email-address"
-                                        autoComplete="email"
-                                    />
-                                    {emailTouched && !emailValid && (
-                                        <Text className="auth-error">Please enter a valid email address</Text>
-                                    )}
-                                    {errors.fields.emailAddress && (
-                                        <Text className="auth-error">{errors.fields.emailAddress.message}</Text>
-                                    )}
-                                </View>
+            <View className="auth-card">
+                <View className="auth-form">
+                    <FormErrorBanner message={formError} />
 
-                                <View className="auth-field">
-                                    <Text className="auth-label">Password</Text>
-                                    <TextInput
-                                        className={`auth-input ${passwordTouched && !passwordValid && 'auth-input-error'}`}
-                                        value={password}
-                                        placeholder="Create a strong password"
-                                        placeholderTextColor="rgba(0, 0, 0, 0.4)"
-                                        secureTextEntry
-                                        onChangeText={setPassword}
-                                        onBlur={() => setPasswordTouched(true)}
-                                        autoComplete="password-new"
-                                    />
-                                    {passwordTouched && !passwordValid && (
-                                        <Text className="auth-error">Password must be at least 8 characters</Text>
-                                    )}
-                                    {errors.fields.password && (
-                                        <Text className="auth-error">{errors.fields.password.message}</Text>
-                                    )}
-                                    {!passwordTouched && (
-                                        <Text className="auth-helper">Minimum 8 characters required</Text>
-                                    )}
-                                </View>
+                    <FormField
+                        label="Email Address"
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        value={emailAddress}
+                        placeholder="name@example.com"
+                        onChangeText={(t) => {
+                            setEmailAddress(t);
+                            if (formError) setFormError(null);
+                        }}
+                        onBlur={() => setEmailTouched(true)}
+                        keyboardType="email-address"
+                        autoComplete="email"
+                        textContentType="emailAddress"
+                        editable={!loading}
+                        error={emailFieldError ?? undefined}
+                    />
 
-                                <Pressable
-                                    className={`auth-button ${(!formValid || fetchStatus === 'fetching') && 'auth-button-disabled'}`}
-                                    onPress={handleSubmit}
-                                    disabled={!formValid || fetchStatus === 'fetching'}
-                                >
-                                    <Text className="auth-button-text">
-                                        {fetchStatus === 'fetching' ? 'Creating Account...' : 'Create Account'}
-                                    </Text>
-                                </Pressable>
-                            </View>
-                        </View>
+                    <PasswordField
+                        label="Password"
+                        value={password}
+                        placeholder="Create a strong password"
+                        onChangeText={(t) => {
+                            setPassword(t);
+                            if (formError) setFormError(null);
+                        }}
+                        onBlur={() => setPasswordTouched(true)}
+                        autoComplete="password-new"
+                        textContentType="newPassword"
+                        editable={!loading}
+                        error={passwordFieldError ?? undefined}
+                        helper={
+                            !passwordTouched && !passwordFieldError
+                                ? `Minimum ${MIN_PASSWORD_LENGTH} characters required`
+                                : undefined
+                        }
+                    />
 
-                        {/* Sign-In Link */}
-                        <View className="auth-link-row">
-                            <Text className="auth-link-copy">Already have an account?</Text>
-                            <Link href="/(auth)/sign-in" asChild>
-                                <Pressable>
-                                    <Text className="auth-link">Sign In</Text>
-                                </Pressable>
-                            </Link>
-                        </View>
+                    <PrimaryButton
+                        label="Create Account"
+                        loadingLabel="Creating Account..."
+                        onPress={handleSubmit}
+                        loading={loading}
+                        disabled={!formValid}
+                    />
+                </View>
+            </View>
 
-                        {/* Required for Clerk's bot protection */}
-                        <View nativeID="clerk-captcha" />
-                    </View>
-                </ScrollView>
-            </KeyboardAvoidingView>
-        </SafeAreaView>
+            <View className="auth-link-row">
+                <Text className="auth-link-copy">Already have an account?</Text>
+                <Link href="/(auth)/sign-in" asChild>
+                    <Pressable hitSlop={8}>
+                        <Text className="auth-link">Sign In</Text>
+                    </Pressable>
+                </Link>
+            </View>
+
+            <View nativeID="clerk-captcha" />
+        </AuthLayout>
     );
 };
 

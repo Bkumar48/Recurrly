@@ -16,7 +16,7 @@ import Toast from "react-native-toast-message";
 
 SplashScreen.preventAutoHideAsync();
 
-const publishableKey = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY!;
+const publishableKey = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY;
 
 if (!publishableKey) {
   throw new Error("Missing Clerk Publishable Key");
@@ -79,7 +79,7 @@ export default function RootLayout() {
           propsToCapture: ["testID"],
         }}
       >
-        <ClerkProvider publishableKey={publishableKey} tokenCache={tokenCache}>
+        <ClerkProvider publishableKey={publishableKey!} tokenCache={tokenCache}>
           <RootLayoutContent />
           <Toast />
         </ClerkProvider>

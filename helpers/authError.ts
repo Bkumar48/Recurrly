@@ -1,31 +1,77 @@
-import { posthog } from "@/lib/posthog";
+import { Platform } from 'react-native';
 
-const getAuthErrorCode = (error: unknown): string => {
-  if (typeof error !== "object" || error === null) {
-    return "unknown_error";
-  }
+/* ---------- Validation constants ---------- */
 
-  const code = (error as { code?: unknown }).code;
+export const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export const MIN_PASSWORD_LENGTH = 8;
 
-  return typeof code === "string" && code.length > 0
-    ? code
-    : "unknown_error";
+/* ---------- Friendly error mapping ---------- */
+
+type ClerkLikeError = {
+    code?: string;
+    message?: string;
+    longMessage?: string;
 };
 
-export const logAuthError = (error: unknown, context: string) => {
-  const code = getAuthErrorCode(error);
+/**
+ * Maps Clerk error codes and messages to user-friendly strings.
+ */
+export const getFriendlyError = (error: unknown): string => {
+    if (!error) return 'Something went wrong. Please try again.';
 
-  const safeError = {
-    context,
-    code,
-    message: "Authentication failed",
-  };
+    const err = error as ClerkLikeError;
 
-  console.error("[AUTH_ERROR]", safeError);
+    switch (err.code) {
+        case 'form_identifier_not_found':
+            return 'No account found with this email.';
+        case 'form_password_incorrect':
+        case 'form_password_validation_failed':
+            return 'Incorrect password. Please try again.';
+        case 'form_identifier_exists':
+            return 'An account with this email already exists.';
+        case 'form_password_pwned':
+            return 'This password has been found in a data breach. Please choose another.';
+        case 'form_password_length_too_short':
+            return `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`;
+        case 'form_code_incorrect':
+        case 'verification_failed':
+            return 'Invalid verification code. Please try again.';
+        case 'verification_expired':
+            return 'Verification code expired. Please request a new one.';
+        case 'too_many_requests':
+        case 'rate_limit_exceeded':
+            return 'Too many attempts. Please wait a moment and try again.';
+        case 'network_error':
+            return 'Network error. Please check your connection.';
+        default:
+            return err.longMessage || err.message || 'Something went wrong. Please try again.';
+    }
+};
 
-  posthog.capture("auth_error", safeError);
+/* ---------- Post-auth navigation ---------- */
 
-  if (__DEV__) {
-    console.debug("Full error (dev only):", error);
-  }
+/**
+ * Handles Clerk's decorateUrl result.
+ *
+ * Key insight: on NATIVE we do NOT call router.replace here.
+ * After Clerk's session is set, <ClerkProvider> re-renders,
+ * and the `(auth)/_layout.tsx` `<Redirect href="/(tabs)" />` fires automatically.
+ * Calling router.replace from finalize() races that redirect and throws
+ * "The action 'REPLACE' ... was not handled by any navigator" because only
+ * the (auth) stack is mounted at that moment.
+ *
+ * On WEB, decorateUrl may return an absolute http(s) URL (SSO flows).
+ * In that case we MUST navigate via window.location so Clerk's cookies
+ * are set on the correct origin — the router can't handle it.
+ */
+export const navigateAfterAuth = (decorateUrl: (path: string) => string) => {
+    const url = decorateUrl('/(tabs)');
+
+    if (Platform.OS === 'web' && url.startsWith('http') && typeof window !== 'undefined') {
+        window.location.href = url;
+        return;
+    }
+
+    // Native: no-op. The (auth)/_layout.tsx Redirect handles navigation
+    // once the Clerk session flips isSignedIn to true.
 };
