@@ -19,6 +19,10 @@ interface VerificationScreenProps {
     loading: boolean;
     error: string | null;
     clearError: () => void;
+    /** Optional parent-controlled override for the resend disabled state. */
+    resendDisabled?: boolean;
+    /** Optional parent-controlled countdown (seconds) shown on the resend button. */
+    resendTimer?: number;
 }
 
 const VerificationScreen = ({
@@ -30,6 +34,8 @@ const VerificationScreen = ({
     loading,
     error,
     clearError,
+    resendDisabled: resendDisabledProp,
+    resendTimer: resendTimerProp,
 }: VerificationScreenProps) => {
     const [code, setCode] = useState('');
     const [resendCooldown, setResendCooldown] = useState(0);
@@ -86,9 +92,14 @@ const VerificationScreen = ({
         }
     }, [onResend, resendCooldown, resending]);
 
+    // Parent-provided props take precedence; fall back to internal state.
+    const effectiveTimer = resendTimerProp ?? resendCooldown;
+    const effectiveDisabled =
+        resendDisabledProp ?? (resendCooldown > 0 || resending);
+
     const resendLabel =
-        resendCooldown > 0
-            ? `Resend Code (${resendCooldown}s)`
+        effectiveTimer > 0
+            ? `Resend Code (${effectiveTimer}s)`
             : resending
               ? 'Sending...'
               : 'Resend Code';
@@ -125,7 +136,7 @@ const VerificationScreen = ({
                     <SecondaryButton
                         label={resendLabel}
                         onPress={handleResend}
-                        disabled={loading || resending || resendCooldown > 0}
+                        disabled={loading || effectiveDisabled}
                     />
 
                     {onReset && (
