@@ -26,6 +26,7 @@ const SignIn = () => {
   const [emailTouched, setEmailTouched] = useState(false);
   const [passwordTouched, setPasswordTouched] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [mfaEmailSent, setMfaEmailSent] = useState(false);
 
   const loading = fetchStatus === "fetching";
 
@@ -50,18 +51,40 @@ const SignIn = () => {
 
   const clearFormError = useCallback(() => setFormError(null), []);
 
-  /**
-   * Shared post-auth finalization.
-   * On native we only identify/track here; navigation to (tabs) is triggered
-   * by the `(auth)/_layout.tsx` <Redirect> when Clerk sets the session.
-   */
+
+  const sendMfaEmailCode = useCallback(async (): Promise<boolean> => {
+    if (!signIn) return false;
+
+    const emailFactor = signIn.supportedSecondFactors?.find(
+      (factor) => factor.strategy === "email_code",
+    );
+
+    if (!emailFactor) {
+      setFormError(
+        "Email verification is required but unavailable. Please contact support.",
+      );
+      return false;
+    }
+
+    const { error } = await signIn.mfa.sendEmailCode();
+
+    if (error) {
+      setFormError(getFriendlyError(error));
+      return false;
+    }
+
+    // ✅ Let Clerk update status first, then UI reacts naturally
+    setMfaEmailSent(true);
+
+    return true;
+  }, [signIn]);
+
   const finalizeAndTrack = useCallback(async () => {
+    if (!signIn) return;
+
     await signIn.finalize({
       navigate: ({ session, decorateUrl }) => {
-        if (session?.currentTask) {
-          console.log("[SignIn] pending session task:", session.currentTask);
-          return;
-        }
+        if (session?.currentTask) return;
 
         const distinctId = session?.user?.id;
         if (distinctId) {
@@ -69,15 +92,16 @@ const SignIn = () => {
             $set_once: { first_sign_in_date: new Date().toISOString() },
           });
         }
-        posthog.capture("user_signed_in");
 
-        // Native: no-op. Web: redirect via window.location for absolute URLs.
+        posthog.capture("user_signed_in");
         navigateAfterAuth(decorateUrl);
       },
     });
   }, [signIn, posthog]);
 
   const handleSubmit = useCallback(async () => {
+    if (!signIn) return;
+
     setEmailTouched(true);
     setPasswordTouched(true);
     if (!formValid || loading) return;
@@ -85,13 +109,12 @@ const SignIn = () => {
     setFormError(null);
 
     try {
-      const { error } = await signIn.password({ emailAddress, password });
+      const { error } = await signIn.password({
+        emailAddress,
+        password,
+      });
 
       if (error) {
-        console.error(
-          "[SignIn] password step failed:",
-          JSON.stringify(error, null, 2),
-        );
         posthog.capture("user_sign_in_failed", {
           error_code: error.code,
           error_message: error.message,
@@ -107,69 +130,38 @@ const SignIn = () => {
           return;
 
         case "needs_second_factor":
-          console.warn("[SignIn] MFA required but unsupported in this flow");
-          setFormError(
-            "Two-factor authentication is required but not yet supported.",
-          );
+        case "needs_client_trust":
+          await sendMfaEmailCode();
           return;
-
-        case "needs_client_trust": {
-          const emailCodeFactor = signIn.supportedSecondFactors.find(
-            (factor) => factor.strategy === "email_code",
-          );
-          if (!emailCodeFactor) {
-            setFormError(
-              "Verification is required but unavailable. Please contact support.",
-            );
-            return;
-          }
-          const { error: mfaError } = await signIn.mfa.sendEmailCode();
-          if (mfaError) {
-            console.error(
-              "[SignIn] mfa sendEmailCode failed:",
-              JSON.stringify(mfaError, null, 2),
-            );
-            setFormError(getFriendlyError(mfaError));
-          }
-          return;
-        }
 
         default:
-          console.error("[SignIn] unexpected status:", signIn.status);
           setFormError("Sign-in could not be completed. Please try again.");
       }
     } catch (err) {
-      console.error("[SignIn] unexpected error:", err);
-      posthog.capture("user_sign_in_failed", {
-        error_message: err instanceof Error ? err.message : "unknown",
-        step: "exception",
-      });
       setFormError(getFriendlyError(err));
     }
   }, [
+    signIn,
     emailAddress,
     password,
     formValid,
     loading,
-    signIn,
     posthog,
     finalizeAndTrack,
+    sendMfaEmailCode,
   ]);
 
   const handleVerify = useCallback(
     async (code: string) => {
+      if (!signIn) return;
+
       setFormError(null);
+
       try {
         const result = await signIn.mfa.verifyEmailCode({ code });
 
-        const verifyError = (
-          result as { error?: { code?: string; message?: string } }
-        )?.error;
+        const verifyError = (result as any)?.error;
         if (verifyError) {
-          console.error(
-            "[SignIn] verifyEmailCode failed:",
-            JSON.stringify(verifyError, null, 2),
-          );
           setFormError(getFriendlyError(verifyError));
           return;
         }
@@ -177,45 +169,34 @@ const SignIn = () => {
         if (signIn.status === "complete") {
           await finalizeAndTrack();
         } else {
-          console.error("[SignIn] verify did not complete:", signIn.status);
-          setFormError(
-            "Verification could not be completed. Please try again.",
-          );
+          setFormError("Verification could not be completed.");
         }
       } catch (err) {
-        console.error("[SignIn] verify exception:", err);
         setFormError(getFriendlyError(err));
       }
     },
     [signIn, finalizeAndTrack],
   );
 
-  const handleResend = useCallback(async (): Promise<boolean> => {
+  const handleResend = useCallback(async () => {
     setFormError(null);
-    try {
-      const { error } = await signIn.mfa.sendEmailCode();
-      if (error) {
-        console.error(
-          "[SignIn] resend failed:",
-          JSON.stringify(error, null, 2),
-        );
-        setFormError(getFriendlyError(error));
-        return false;
-      }
-      return true;
-    } catch (err) {
-      console.error("[SignIn] resend exception:", err);
-      setFormError(getFriendlyError(err));
-      return false;
-    }
-  }, [signIn]);
+    return await sendMfaEmailCode();
+  }, [sendMfaEmailCode]);
 
   const handleReset = useCallback(() => {
+    if (!signIn) return;
+
     setFormError(null);
+    setMfaEmailSent(false);
     signIn.reset();
   }, [signIn]);
 
-  if (signIn.status === "needs_client_trust") {
+  // ✅ FIXED: strict UI gate (no race condition)
+  const isMfaState =
+    signIn?.status === "needs_client_trust" ||
+    signIn?.status === "needs_second_factor";
+
+  if (mfaEmailSent && isMfaState) {
     return (
       <VerificationScreen
         title="Verify your identity"
@@ -243,18 +224,9 @@ const SignIn = () => {
 
           <FormField
             label="Email Address"
-            autoCapitalize="none"
-            autoCorrect={false}
             value={emailAddress}
-            placeholder="name@example.com"
-            onChangeText={(t) => {
-              setEmailAddress(t);
-              if (formError) setFormError(null);
-            }}
+            onChangeText={(t) => setEmailAddress(t)}
             onBlur={() => setEmailTouched(true)}
-            keyboardType="email-address"
-            autoComplete="email"
-            textContentType="emailAddress"
             editable={!loading}
             error={emailFieldError ?? undefined}
           />
@@ -262,21 +234,14 @@ const SignIn = () => {
           <PasswordField
             label="Password"
             value={password}
-            placeholder="Enter your password"
-            onChangeText={(t) => {
-              setPassword(t);
-              if (formError) setFormError(null);
-            }}
+            onChangeText={(t) => setPassword(t)}
             onBlur={() => setPasswordTouched(true)}
-            autoComplete="password"
-            textContentType="password"
             editable={!loading}
             error={passwordFieldError ?? undefined}
           />
 
           <PrimaryButton
             label="Sign In"
-            loadingLabel="Signing In..."
             onPress={handleSubmit}
             loading={loading}
             disabled={!formValid}
@@ -285,10 +250,10 @@ const SignIn = () => {
       </View>
 
       <View className="auth-link-row">
-        <Text className="auth-link-copy">Don&apos;t have an account?</Text>
+        <Text>Don't have an account?</Text>
         <Link href="/(auth)/sign-up" asChild>
-          <Pressable hitSlop={8}>
-            <Text className="auth-link">Create Account</Text>
+          <Pressable>
+            <Text>Create Account</Text>
           </Pressable>
         </Link>
       </View>
