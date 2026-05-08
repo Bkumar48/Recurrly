@@ -7,14 +7,15 @@ import {
   HOME_USER,
   HOME_BALANCE,
   UPCOMING_SUBSCRIPTIONS,
-  HOME_SUBSCRIPTIONS,
 } from "@/constants/data";
 import { icons } from "@/constants/icons";
 import { formatCurrency, formatSubscriptionDateTime } from "@/lib/utils";
 import ListHeading from "@/components/ListHeading";
 import UpcomingSubscriptionCard from "@/components/UpcomingSubscriptionCard";
 import SubscriptionCard from "@/components/SubscriptionCard";
-import { useState } from "react";
+import CreateSubscriptionModal from "@/components/CreateSubscriptionModal";
+import { useSubscriptionStore } from "@/lib/subscriptionStore";
+import { useState, useCallback } from "react";
 
 const SafeAreaView = styled(RNSafeAreaView);
 
@@ -22,6 +23,16 @@ export default function App() {
   const [expandedSubscriptionId, setExpandedSubscriptionId] = useState<
     string | null
   >(null);
+  const { subscriptions, addSubscription } = useSubscriptionStore();
+  const [modalVisible, setModalVisible] = useState(false);
+
+  const handleCreate = useCallback(
+    (newSub: Subscription) => {
+      addSubscription(newSub);
+    },
+    [addSubscription],
+  );
+
   return (
     <SafeAreaView className="flex-1 bg-background p-5">
       <FlatList
@@ -30,9 +41,12 @@ export default function App() {
             <View className="home-header">
               <View className="home-user">
                 <Image source={images.avatar} className="home-avatar" />
-                <Text className="home-user-name">{HOME_USER.name}</Text>
+                <Text className="home-user-name" numberOfLines={1}>{HOME_USER.name}</Text>
               </View>
-              <Pressable onPress={() => {}} className="p-2 border border-gray-300 rounded-full">
+              <Pressable
+                onPress={() => setModalVisible(true)}
+                className="p-2 border border-gray-300 rounded-full"
+              >
                 <Image source={icons.add} className="size-6" />
               </Pressable>
             </View>
@@ -69,7 +83,7 @@ export default function App() {
             <ListHeading title="Subscriptions" />
           </>
         )}
-        data={HOME_SUBSCRIPTIONS}
+        data={subscriptions}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
           <SubscriptionCard
@@ -90,6 +104,13 @@ export default function App() {
         }
         contentContainerClassName="pb-18"
       />
+
+      <CreateSubscriptionModal
+        visible={modalVisible}
+        onClose={() => setModalVisible(false)}
+        onCreate={handleCreate}
+      />
     </SafeAreaView>
   );
 }
+

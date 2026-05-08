@@ -14,7 +14,11 @@ declare global {
 
     interface Subscription {
         id: string;
-        icon: ImageSourcePropType;
+        icon?: ImageSourcePropType;
+        /** MaterialCommunityIcons glyph name (for user-created subs) */
+        iconName?: string;
+        /** Background colour for the vector icon container */
+        iconColor?: string;
         name: string;
         plan?: string;
         category?: string;
