@@ -22,6 +22,9 @@ if (!publishableKey) {
   throw new Error("Missing Clerk Publishable Key");
 }
 
+// After the guard above, publishableKey is guaranteed to be a string.
+const clerkKey: string = publishableKey;
+
 function RootLayoutContent() {
   const { isLoaded: authLoaded } = useAuth();
   const pathname = usePathname();
@@ -79,7 +82,7 @@ export default function RootLayout() {
           propsToCapture: ["testID"],
         }}
       >
-        <ClerkProvider publishableKey={publishableKey!} tokenCache={tokenCache}>
+        <ClerkProvider publishableKey={clerkKey} tokenCache={tokenCache}>
           <RootLayoutContent />
           <Toast />
         </ClerkProvider>

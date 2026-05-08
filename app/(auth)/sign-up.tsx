@@ -145,20 +145,23 @@ const SignUp = () => {
                 setFormError(getFriendlyError(err));
             }
         },
-        [signUp, emailAddress, posthog]
+        [signUp, posthog]
     );
 
-    const handleResend = useCallback(async () => {
+    const handleResend = useCallback(async (): Promise<boolean> => {
         setFormError(null);
         try {
             const { error } = await signUp.verifications.sendEmailCode();
             if (error) {
                 console.error('[SignUp] resend failed:', JSON.stringify(error, null, 2));
                 setFormError(getFriendlyError(error));
+                return false;
             }
+            return true;
         } catch (err) {
             console.error('[SignUp] resend exception:', err);
             setFormError(getFriendlyError(err));
+            return false;
         }
     }, [signUp]);
 
