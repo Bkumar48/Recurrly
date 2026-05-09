@@ -87,7 +87,7 @@
     }
 
     .home-balance-label {
-        @apply text-xl font-sans-semibold text-white/80;
+        @apply text-3xl font-sans-semibold text-white/80;
     }
 
     .home-balance-row {

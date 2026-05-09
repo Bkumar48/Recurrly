@@ -13,6 +13,7 @@ import { tokenCache } from "@clerk/expo/token-cache";
 import { PostHogProvider } from "posthog-react-native";
 import { posthog } from "@/lib/posthog";
 import Toast from "react-native-toast-message";
+import { StatusBar } from "expo-status-bar";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -74,6 +75,7 @@ function RootLayoutContent() {
 export default function RootLayout() {
   return (
     <SafeAreaProvider>
+      <StatusBar style="dark" />
       <PostHogProvider
         client={posthog}
         autocapture={{
